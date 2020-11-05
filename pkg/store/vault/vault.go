@@ -214,7 +214,7 @@ func (v *Vault) newConfig() (*vault.Config, error) {
 func (v *Vault) setToken(ctx context.Context, client Client) error {
 	tokenRef := v.store.GetSpec().Vault.Auth.TokenSecretRef
 	if tokenRef != nil {
-		token, err := v.secretKeyRef(ctx, tokenRef)
+		token, err := v.secretKeyRefOrEmptyString(ctx, tokenRef)
 		if err != nil {
 			return err
 		}
@@ -260,23 +260,20 @@ func (v *Vault) secretKeyRefOrEmptyString(ctx context.Context, selector *smmeta.
 	}
 }
 
-func (v *Vault) secretKeyRef(ctx context.Context, secretRef *smmeta.SecretKeySelector) (string, error) {
+func (v *Vault) secretKeyRef(ctx context.Context, namespace, name, key string) (string, error) {
 	secret := &corev1.Secret{}
 	ref := types.NamespacedName{
-		Namespace: v.namespace,
-		Name:      secretRef.Name,
-	}
-	if (v.store.GetTypeMeta().Kind == smv1alpha1.ClusterSecretStoreKind) && (secretRef.Namespace != nil) {
-		ref.Namespace = *secretRef.Namespace
+		Namespace: namespace,
+		Name:      name,
 	}
 	err := v.kube.Get(ctx, ref, secret)
 	if err != nil {
 		return "", err
 	}
 
-	keyBytes, ok := secret.Data[secretRef.Key]
+	keyBytes, ok := secret.Data[key]
 	if !ok {
-		return "", fmt.Errorf("no data for %q in secret '%s/%s'", secretRef.Key, ref.Namespace, secretRef.Name)
+		return "", fmt.Errorf("no data for %q in secret '%s/%s'", key, namespace, name)
 	}
 
 	value := string(keyBytes)
@@ -288,7 +285,7 @@ func (v *Vault) secretKeyRef(ctx context.Context, secretRef *smmeta.SecretKeySel
 func (v *Vault) requestTokenWithAppRoleRef(ctx context.Context, client Client, appRole *smv1alpha1.VaultAppRole) (string, error) {
 	roleID := strings.TrimSpace(appRole.RoleID)
 
-	secretID, err := v.secretKeyRef(ctx, &appRole.SecretRef)
+	secretID, err := v.secretKeyRefOrEmptyString(ctx, &appRole.SecretRef)
 	if err != nil {
 		return "", err
 	}
@@ -354,7 +351,7 @@ func (v *Vault) requestTokenWithKubernetesAuth(ctx context.Context, client Clien
 			tokenRef = kubernetesAuth.SecretRef.DeepCopy()
 			tokenRef.Key = "token"
 		}
-		jwt, err = v.secretKeyRef(ctx, tokenRef)
+		jwt, err = v.secretKeyRefOrEmptyString(ctx, tokenRef)
 		if err != nil {
 			return "", err
 		}
