@@ -17,8 +17,15 @@ package vault
 import (
 	"context"
 	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/endpoints"
+	"github.com/hashicorp/errwrap"
+	"github.com/hashicorp/go-hclog"
+	smmeta "github.com/itscontained/secret-manager/pkg/apis/meta/v1"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -27,6 +34,11 @@ import (
 	"github.com/go-logr/logr"
 
 	vault "github.com/hashicorp/vault/api"
+
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/sts"
+	"github.com/hashicorp/vault/sdk/helper/awsutil"
 
 	smv1alpha1 "github.com/itscontained/secret-manager/pkg/apis/secretmanager/v1alpha1"
 	ctxlog "github.com/itscontained/secret-manager/pkg/log"
@@ -235,6 +247,19 @@ func (v *Vault) setToken(ctx context.Context, client Client) error {
 	return fmt.Errorf("error initializing Vault client: tokenSecretRef, appRoleSecretRef, or Kubernetes auth role not set")
 }
 
+func (v *Vault) secretKeyRefOrEmptyString(ctx context.Context, selector *smmeta.SecretKeySelector) (string, error) {
+	if selector.Name != "" && selector.Key != "" {
+		ref, err := v.secretKeyRef(ctx, v.namespace, selector.Name, selector.Key)
+		if err != nil {
+			return "", err
+		} else {
+			return ref, nil
+		}
+	} else {
+		return "", nil
+	}
+}
+
 func (v *Vault) secretKeyRef(ctx context.Context, namespace, name, key string) (string, error) {
 	secret := &corev1.Secret{}
 	ref := types.NamespacedName{
@@ -365,4 +390,214 @@ func (v *Vault) requestTokenWithKubernetesAuth(ctx context.Context, client Clien
 	}
 
 	return token, nil
+}
+
+func (v *Vault) requestTokenWithAWSAuth(auth *smv1alpha1.VaultAWSAuth, client Client, ctx context.Context) (string, error) {
+	var err error
+	/*
+		parameters := map[string]string{
+			"role": auth.Role,
+			"jwt":  jwt,
+		}
+		authPath := auth.Path
+		if authPath == "" {
+			authPath = smv1alpha1.DefaultVaultAWSAuthMountPath
+		}
+		url := strings.Join([]string{"/v1", "auth", authPath, "login"}, "/")
+		request := client.NewRequest("POST", url)
+
+		err = request.SetJSONBody(parameters)
+		if err != nil {
+			return "", fmt.Errorf("error encoding Vault parameters: %s", err.Error())
+		}
+
+		resp, err := client.RawRequestWithContext(ctx, request)
+		if err != nil {
+			return "", fmt.Errorf("error calling Vault server: %s", err.Error())
+		}
+
+		defer resp.Body.Close()
+		vaultResult := vault.Secret{}
+		err = resp.DecodeJSON(&vaultResult)
+		if err != nil {
+			return "", fmt.Errorf("unable to decode JSON payload: %s", err.Error())
+		}
+
+		token, err := vaultResult.TokenID()
+		if err != nil {
+			return "", fmt.Errorf("unable to read token: %s", err.Error())
+		}
+
+		return token, nil*/
+
+	mount := auth.Path
+
+	// Do we need the role reference at all?
+	/*role, err := v.secretKeyRefOrEmptyString(ctx, auth.AWS.Role)
+	if err != nil {
+		return "", fmt.Errorf("error generating AWS login credentials: %s", err.Error())
+	}*/
+	aKid := ""
+	sKey := ""
+	if auth.AWS != nil {
+		aKid, err = v.secretKeyRefOrEmptyString(ctx, auth.AWS.AccessKeyID)
+		if err != nil {
+			return "", fmt.Errorf("error generating AWS login credentials: %s", err.Error())
+		}
+		sKey, err = v.secretKeyRefOrEmptyString(ctx, auth.AWS.SecretAccessKey)
+		if err != nil {
+			return "", fmt.Errorf("error generating AWS login credentials: %s", err.Error())
+		}
+	}
+
+	headerValue := auth.IamServerIdHeaderValue
+
+	creds, err := v.RetrieveCreds(
+		aKid,
+		sKey,
+		// TODO this is not supported in the CRD yet
+		"",
+		ctx)
+	if err != nil {
+		return "", fmt.Errorf("error generating AWS login credentials: %s", err.Error())
+	}
+
+	region := auth.Region
+	if region == "" {
+		region = awsutil.DefaultRegion
+	}
+	loginData, err := v.GenerateAWSLoginData(creds, headerValue, region)
+	if err != nil {
+		return "", err
+	}
+	if loginData == nil {
+		return "", fmt.Errorf("got nil response from GenerateAWSLoginData")
+	}
+	loginData["role"] = auth.Role
+
+	if mount == "" {
+		mount = smv1alpha1.DefaultVaultKubernetesAuthMountPath
+	}
+	url := strings.Join([]string{"/v1", "auth", mount, "login"}, "/")
+	request := client.NewRequest("POST", url)
+
+	err = request.SetJSONBody(loginData)
+	if err != nil {
+		return "", fmt.Errorf("error encoding Vault parameters: %s", err.Error())
+	}
+
+	resp, err := client.RawRequestWithContext(ctx, request)
+	if err != nil {
+		return "", fmt.Errorf("error calling Vault server: %s", err.Error())
+	}
+
+	defer resp.Body.Close()
+	vaultResult := vault.Secret{}
+	err = resp.DecodeJSON(&vaultResult)
+	if err != nil {
+		return "", fmt.Errorf("unable to decode JSON payload: %s", err.Error())
+	}
+
+	token, err := vaultResult.TokenID()
+	if err != nil {
+		return "", fmt.Errorf("unable to read token: %s", err.Error())
+	}
+
+	return token, nil
+	/*
+		path := fmt.Sprintf("auth/%s/login", mount)
+		secret, err := client.NewRequest(path, loginData)
+
+		if err != nil {
+			return "", err
+		}
+		if secret == nil {
+			return "", fmt.Errorf("empty response from credential provider")
+		}
+
+		return secret, nil*/
+}
+
+// STS is a really weird service that used to only have global endpoints but now has regional endpoints as well.
+// For backwards compatibility, even if you request a region other than us-east-1, it'll still sign for us-east-1.
+// See, e.g., https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_enable-regions.html#id_credentials_temp_enable-regions_writing_code
+// So we have to shim in this EndpointResolver to force it to sign for the right region
+func stsSigningResolver(service, region string, optFns ...func(*endpoints.Options)) (endpoints.ResolvedEndpoint, error) {
+	defaultEndpoint, err := endpoints.DefaultResolver().EndpointFor(service, region, optFns...)
+	if err != nil {
+		return defaultEndpoint, err
+	}
+	defaultEndpoint.SigningRegion = region
+	return defaultEndpoint, nil
+}
+
+// GenerateAWSLoginData populates the necessary data to send to the Vault server for generating a token
+// This is useful for other API clients to use
+func (v *Vault) GenerateAWSLoginData(creds *credentials.Credentials, headerValue, configuredRegion string) (map[string]interface{}, error) {
+	loginData := make(map[string]interface{})
+
+	// Use the credentials we've found to construct an STS session
+	region, err := awsutil.GetRegion(configuredRegion)
+	if err != nil {
+		v.log.Info(fmt.Sprintf("defaulting region to %q due to %s", awsutil.DefaultRegion, err.Error()))
+		region = awsutil.DefaultRegion
+	}
+	stsSession, err := session.NewSessionWithOptions(session.Options{
+		Config: aws.Config{
+			Credentials:      creds,
+			Region:           &region,
+			EndpointResolver: endpoints.ResolverFunc(stsSigningResolver),
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var params *sts.GetCallerIdentityInput
+	svc := sts.New(stsSession)
+	stsRequest, _ := svc.GetCallerIdentityRequest(params)
+
+	// Inject the required auth header value, if supplied, and then sign the request including that header
+	if headerValue != "" {
+		stsRequest.HTTPRequest.Header.Add("X-Vault-AWS-IAM-Server-ID", headerValue)
+	}
+	stsRequest.Sign()
+
+	// Now extract out the relevant parts of the request
+	headersJson, err := json.Marshal(stsRequest.HTTPRequest.Header)
+	if err != nil {
+		return nil, err
+	}
+	requestBody, err := ioutil.ReadAll(stsRequest.HTTPRequest.Body)
+	if err != nil {
+		return nil, err
+	}
+	loginData["iam_http_request_method"] = stsRequest.HTTPRequest.Method
+	loginData["iam_request_url"] = base64.StdEncoding.EncodeToString([]byte(stsRequest.HTTPRequest.URL.String()))
+	loginData["iam_request_headers"] = base64.StdEncoding.EncodeToString(headersJson)
+	loginData["iam_request_body"] = base64.StdEncoding.EncodeToString(requestBody)
+
+	return loginData, nil
+}
+
+func (v *Vault) RetrieveCreds(accessKey, secretKey, sessionToken string, ctx context.Context) (*credentials.Credentials, error) {
+	credConfig := &awsutil.CredentialsConfig{
+		AccessKey:    accessKey,
+		SecretKey:    secretKey,
+		SessionToken: sessionToken,
+		Logger:       hclog.FromContext(ctx),
+	}
+	creds, err := credConfig.GenerateCredentialChain()
+	if err != nil {
+		return nil, err
+	}
+	if creds == nil {
+		return nil, fmt.Errorf("could not compile valid credential providers from static config, environment, shared, or instance metadata")
+	}
+
+	_, err = creds.Get()
+	if err != nil {
+		return nil, errwrap.Wrapf("failed to retrieve credentials from credential chain: {{err}}", err)
+	}
+	return creds, nil
 }

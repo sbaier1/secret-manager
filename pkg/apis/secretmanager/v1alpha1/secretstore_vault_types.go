@@ -59,7 +59,7 @@ type VaultStore struct {
 }
 
 // Configuration used to authenticate with a Vault server.
-// Only one of `tokenSecretRef`, `appRole` or `kubernetes` may be specified.
+// Only one of `tokenSecretRef`, `appRole`, `aws` or `kubernetes` may be specified.
 type VaultAuth struct {
 	// TokenSecretRef authenticates with Vault by presenting a token.
 	// +optional
@@ -114,3 +114,40 @@ type VaultKubernetesAuth struct {
 	// Kubernetes ServiceAccount with a set of Vault policies.
 	Role string `json:"role"`
 }
+
+type VaultAWSAuth struct {
+	// AWS credential override, for specifying credentials / IAM role directly
+	// +optional
+	AWS *AWSAuth `json:"awsCredentials,omitempty"`
+
+	// Path where the AWS authentication backend is mounted in Vault, e.g.:
+	// "aws"
+	// +kubebuilder:default=aws
+	// +optional
+	Path string `json:"mountPath"`
+
+	// A required field containing the Vault Role to assume. A Role binds a
+	// AWS identity to a set of Vault policies.
+	Role string `json:"role"`
+
+	// A required field containing the type of AWS authentication to perform on Vault.
+	// See https://www.vaultproject.io/docs/auth/aws for more information. Valid options are iam and ec2.
+	// +kubebuilder:default=iam
+	// +optional
+	Type VaultAWSAuthType `json:"type"`
+
+	// The value to use for the X-Vault-AWS-IAM-Server-ID when authenticating on Vault, if any.
+	// +optional
+	IamServerIdHeaderValue string `json:"iamServerIdHeaderValue"`
+
+	// The region to authenticate in.
+	// +optional
+	Region string `json:"region"`
+}
+
+type VaultAWSAuthType string
+
+const (
+	IAM = "iam"
+	EC2 = "ec2"
+)
