@@ -47,6 +47,7 @@ podLabels: {}
 extraEnv: []
 
 podSecurityContext: {}
+  # Use this if you want to use EKS' IAM roles for Service Accounts (IRSA) so the operator can access the WebIdentity token
   # fsGroup: 2000
 
 securityContext: {}

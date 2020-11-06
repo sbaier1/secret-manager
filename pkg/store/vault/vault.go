@@ -395,42 +395,6 @@ func (v *Vault) requestTokenWithKubernetesAuth(ctx context.Context, client Clien
 
 func (v *Vault) requestTokenWithAWSAuth(auth *smv1alpha1.VaultAWSAuth, client Client, ctx context.Context) (string, error) {
 	var err error
-	/*
-		parameters := map[string]string{
-			"role": auth.Role,
-			"jwt":  jwt,
-		}
-		authPath := auth.Path
-		if authPath == "" {
-			authPath = smv1alpha1.DefaultVaultAWSAuthMountPath
-		}
-		url := strings.Join([]string{"/v1", "auth", authPath, "login"}, "/")
-		request := client.NewRequest("POST", url)
-
-		err = request.SetJSONBody(parameters)
-		if err != nil {
-			return "", fmt.Errorf("error encoding Vault parameters: %s", err.Error())
-		}
-
-		resp, err := client.RawRequestWithContext(ctx, request)
-		if err != nil {
-			return "", fmt.Errorf("error calling Vault server: %s", err.Error())
-		}
-
-		defer resp.Body.Close()
-		vaultResult := vault.Secret{}
-		err = resp.DecodeJSON(&vaultResult)
-		if err != nil {
-			return "", fmt.Errorf("unable to decode JSON payload: %s", err.Error())
-		}
-
-		token, err := vaultResult.TokenID()
-		if err != nil {
-			return "", fmt.Errorf("unable to read token: %s", err.Error())
-		}
-
-		return token, nil*/
-
 	mount := auth.Path
 
 	// Do we need the role reference at all?
@@ -505,18 +469,6 @@ func (v *Vault) requestTokenWithAWSAuth(auth *smv1alpha1.VaultAWSAuth, client Cl
 	}
 
 	return token, nil
-	/*
-		path := fmt.Sprintf("auth/%s/login", mount)
-		secret, err := client.NewRequest(path, loginData)
-
-		if err != nil {
-			return "", err
-		}
-		if secret == nil {
-			return "", fmt.Errorf("empty response from credential provider")
-		}
-
-		return secret, nil*/
 }
 
 // STS is a really weird service that used to only have global endpoints but now has regional endpoints as well.
