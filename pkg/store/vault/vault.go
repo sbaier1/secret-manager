@@ -24,7 +24,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/endpoints"
 	"github.com/hashicorp/errwrap"
-	"github.com/hashicorp/go-hclog"
 	smmeta "github.com/itscontained/secret-manager/pkg/apis/meta/v1"
 	"io/ioutil"
 	"net/http"
@@ -538,7 +537,6 @@ func (v *Vault) RetrieveCreds(accessKey, secretKey, sessionToken string, ctx con
 		AccessKey:    accessKey,
 		SecretKey:    secretKey,
 		SessionToken: sessionToken,
-		Logger:       hclog.FromContext(ctx),
 	}
 	creds, err := credConfig.GenerateCredentialChain()
 	if err != nil {

@@ -74,6 +74,11 @@ type VaultAuth struct {
 	// token stored in the named Secret resource to the Vault server.
 	// +optional
 	Kubernetes *VaultKubernetesAuth `json:"kubernetes,omitempty"`
+
+	// AWS authenticates with Vault by passing the AWS credentials specified
+	// in env vars to the Vault server.
+	// +optional
+	AWS *VaultAWSAuth `json:"aws,omitempty"`
 }
 
 // VaultAppRole authenticates with Vault using the App Role auth mechanism,
