@@ -23,8 +23,8 @@ import (
 	"fmt"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/endpoints"
-	"github.com/hashicorp/errwrap"
 	smmeta "github.com/itscontained/secret-manager/pkg/apis/meta/v1"
+	"github.com/itscontained/secret-manager/pkg/util/awsutil"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -37,7 +37,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/sts"
-	"github.com/hashicorp/vault/sdk/helper/awsutil"
 
 	smv1alpha1 "github.com/itscontained/secret-manager/pkg/apis/secretmanager/v1alpha1"
 	ctxlog "github.com/itscontained/secret-manager/pkg/log"
@@ -401,31 +400,33 @@ func (v *Vault) requestTokenWithAWSAuth(auth *smv1alpha1.VaultAWSAuth, client Cl
 	if err != nil {
 		return "", fmt.Errorf("error generating AWS login credentials: %s", err.Error())
 	}*/
+	var id *smmeta.SecretKeySelector
+	var key *smmeta.SecretKeySelector
 	aKid := ""
 	sKey := ""
 	if auth.AWS != nil {
-		aKid, err = v.secretKeyRefOrEmptyString(ctx, auth.AWS.AccessKeyID)
+		id = auth.AWS.AccessKeyID
+		key = auth.AWS.SecretAccessKey
+		aKid, err = v.secretKeyRefOrEmptyString(ctx, id)
 		if err != nil {
 			return "", fmt.Errorf("error generating AWS login credentials: %s", err.Error())
 		}
-		sKey, err = v.secretKeyRefOrEmptyString(ctx, auth.AWS.SecretAccessKey)
+		sKey, err = v.secretKeyRefOrEmptyString(ctx, key)
 		if err != nil {
 			return "", fmt.Errorf("error generating AWS login credentials: %s", err.Error())
 		}
 	}
-
-	headerValue := auth.IamServerIdHeaderValue
-
-	creds, err := v.RetrieveCreds(
+	creds, err := awsutil.RetrieveCreds(
 		aKid,
 		sKey,
 		// TODO this is not supported in the CRD yet
 		"",
-		ctx)
+		v.log)
 	if err != nil {
 		return "", fmt.Errorf("error generating AWS login credentials: %s", err.Error())
 	}
 
+	headerValue := auth.IamServerIdHeaderValue
 	region := auth.Region
 	if region == "" {
 		region = awsutil.DefaultRegion
@@ -470,19 +471,6 @@ func (v *Vault) requestTokenWithAWSAuth(auth *smv1alpha1.VaultAWSAuth, client Cl
 	return token, nil
 }
 
-// STS is a really weird service that used to only have global endpoints but now has regional endpoints as well.
-// For backwards compatibility, even if you request a region other than us-east-1, it'll still sign for us-east-1.
-// See, e.g., https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_enable-regions.html#id_credentials_temp_enable-regions_writing_code
-// So we have to shim in this EndpointResolver to force it to sign for the right region
-func stsSigningResolver(service, region string, optFns ...func(*endpoints.Options)) (endpoints.ResolvedEndpoint, error) {
-	defaultEndpoint, err := endpoints.DefaultResolver().EndpointFor(service, region, optFns...)
-	if err != nil {
-		return defaultEndpoint, err
-	}
-	defaultEndpoint.SigningRegion = region
-	return defaultEndpoint, nil
-}
-
 // GenerateAWSLoginData populates the necessary data to send to the Vault server for generating a token
 // This is useful for other API clients to use
 func (v *Vault) GenerateAWSLoginData(creds *credentials.Credentials, headerValue, configuredRegion string) (map[string]interface{}, error) {
@@ -498,7 +486,7 @@ func (v *Vault) GenerateAWSLoginData(creds *credentials.Credentials, headerValue
 		Config: aws.Config{
 			Credentials:      creds,
 			Region:           &region,
-			EndpointResolver: endpoints.ResolverFunc(stsSigningResolver),
+			EndpointResolver: endpoints.ResolverFunc(awsutil.StsSigningResolver),
 		},
 	})
 	if err != nil {
@@ -530,25 +518,4 @@ func (v *Vault) GenerateAWSLoginData(creds *credentials.Credentials, headerValue
 	loginData["iam_request_body"] = base64.StdEncoding.EncodeToString(requestBody)
 
 	return loginData, nil
-}
-
-func (v *Vault) RetrieveCreds(accessKey, secretKey, sessionToken string, ctx context.Context) (*credentials.Credentials, error) {
-	credConfig := &awsutil.CredentialsConfig{
-		AccessKey:    accessKey,
-		SecretKey:    secretKey,
-		SessionToken: sessionToken,
-	}
-	creds, err := credConfig.GenerateCredentialChain()
-	if err != nil {
-		return nil, err
-	}
-	if creds == nil {
-		return nil, fmt.Errorf("could not compile valid credential providers from static config, environment, shared, or instance metadata")
-	}
-
-	_, err = creds.Get()
-	if err != nil {
-		return nil, errwrap.Wrapf("failed to retrieve credentials from credential chain: {{err}}", err)
-	}
-	return creds, nil
 }

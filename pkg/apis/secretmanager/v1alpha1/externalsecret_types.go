@@ -16,6 +16,7 @@ package v1alpha1
 
 import (
 	smmeta "github.com/itscontained/secret-manager/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -37,7 +38,7 @@ type ExternalSecretSpec struct {
 	// +kubebuilder:validation:Format=any
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +optional
-	Template []byte `json:"template,omitempty"`
+	Template runtime.RawExtension `json:"template,omitempty"`
 
 	// Data is a list of references to secret values.
 	// +optional
@@ -83,6 +84,11 @@ type RemoteReference struct {
 	// by the referenced SecretStore.
 	// +optional
 	Version *string `json:"version,omitempty"`
+
+	// Whether the structure of the resulting secret should be ignored (If it is binary or the embedded JSON should not be deserialized)
+	// +kubebuilder:default=false
+	// +optional
+	IgnoreStructure bool `json:"ignoreStructure,omitempty"`
 }
 
 // ExternalSecretStatus defines the observed state of ExternalSecret

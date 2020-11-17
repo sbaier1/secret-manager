@@ -46,8 +46,9 @@ import (
 var _ store.Client = &AWS{}
 
 const (
-	AWSSecretsmanagerEndpoint = "AWS_SECRETSMANAGER_ENDPOINT"
-	AWSSTSEndpoint            = "AWS_STS_ENDPOINT"
+	AWSSecretsmanagerEndpoint        = "AWS_SECRETSMANAGER_ENDPOINT"
+	AWSSTSEndpoint                   = "AWS_STS_ENDPOINT"
+	AWSNonStructuralSecretDefaultKey = "data"
 )
 
 type AWS struct {
@@ -87,13 +88,13 @@ func (a *AWS) GetSecret(ctx context.Context, ref smv1alpha1.RemoteReference) ([]
 	if ref.Version != nil {
 		version = *ref.Version
 	}
-	data, err := a.readSecret(ctx, ref.Name, version)
-	if err != nil {
-		return nil, err
-	}
 	property := ""
 	if ref.Property != nil {
 		property = *ref.Property
+	}
+	data, err := a.readSecret(ctx, ref.Name, version, property, ref.IgnoreStructure)
+	if err != nil {
+		return nil, err
 	}
 	value, exists := data[property]
 	if !exists {
@@ -107,10 +108,10 @@ func (a *AWS) GetSecretMap(ctx context.Context, ref smv1alpha1.RemoteReference) 
 	if ref.Version != nil {
 		version = *ref.Version
 	}
-	return a.readSecret(ctx, ref.Name, version)
+	return a.readSecret(ctx, ref.Name, version, "", ref.IgnoreStructure)
 }
 
-func (a *AWS) readSecret(ctx context.Context, id, version string) (map[string][]byte, error) {
+func (a *AWS) readSecret(ctx context.Context, id, version, property string, ignoreStructure bool) (map[string][]byte, error) {
 	input := &secretsmanager.GetSecretValueInput{
 		SecretId: aws.String(id),
 	}
@@ -122,16 +123,34 @@ func (a *AWS) readSecret(ctx context.Context, id, version string) (map[string][]
 	if err != nil {
 		return nil, fmt.Errorf("error getting secret value: %w", err)
 	}
-	smData := make(map[string]string)
-	err = json.Unmarshal([]byte(*resp.SecretString), &smData)
-	if err != nil {
-		return nil, fmt.Errorf("unable to unmarshal secret value: %w", err)
-	}
 	secretData := make(map[string][]byte)
-	for k, v := range smData {
-		secretData[k] = []byte(v)
+	if ignoreStructure {
+		// If secret is binary type, just write it directly to the desired property.
+		var propertyKey = AWSNonStructuralSecretDefaultKey
+		if property != "" {
+			propertyKey = property
+		}
+		if resp.SecretBinary != nil {
+			secretData[propertyKey] = resp.SecretBinary
+		} else if resp.SecretString != nil {
+			secretData[propertyKey] = []byte(*resp.SecretString)
+		} else {
+			return nil, fmt.Errorf("could not parse secret data")
+		}
+		return secretData, nil
+	} else {
+		smData := make(map[string]string)
+		if resp.SecretString != nil {
+			err = json.Unmarshal([]byte(*resp.SecretString), &smData)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("unable to unmarshal secret value: %w", err)
+		}
+		for k, v := range smData {
+			secretData[k] = []byte(v)
+		}
+		return secretData, nil
 	}
-	return secretData, nil
 }
 
 func (a *AWS) newConfig(ctx context.Context) (*aws.Config, error) {
@@ -151,19 +170,6 @@ func (a *AWS) newConfig(ctx context.Context) (*aws.Config, error) {
 	if a.store.GetTypeMeta().String() == "ClusterSecretStore" {
 		scoped = false
 	}
-	if spec.AuthSecretRef.AccessKeyID == nil || spec.AuthSecretRef.SecretAccessKey == nil {
-		return nil, fmt.Errorf("missing accessKeyID/secretAccessKey in store config")
-	}
-	aKid, err := a.secretKeyRef(ctx, a.store.GetNamespace(), *spec.AuthSecretRef.AccessKeyID, scoped)
-	if err != nil {
-		return nil, err
-	}
-	sak, err := a.secretKeyRef(ctx, a.store.GetNamespace(), *spec.AuthSecretRef.SecretAccessKey, scoped)
-	if err != nil {
-		return nil, err
-	}
-	nScp := aws.NewStaticCredentialsProvider(aKid, sak, "secret-manager")
-	cfg.Credentials = nScp
 	if spec.AuthSecretRef.Role != nil {
 		role, err := a.secretKeyRef(ctx, a.store.GetNamespace(), *spec.AuthSecretRef.Role, scoped)
 		if err != nil {
@@ -173,7 +179,22 @@ func (a *AWS) newConfig(ctx context.Context) (*aws.Config, error) {
 		stsCp := stscreds.NewAssumeRoleProvider(stsClient, role)
 		cfg.Credentials = stsCp
 	}
-	return &cfg, nil
+
+	if spec.AuthSecretRef == nil || spec.AuthSecretRef.AccessKeyID == nil || spec.AuthSecretRef.SecretAccessKey == nil {
+		return &cfg, nil
+	} else {
+		aKid, err := a.secretKeyRef(ctx, a.store.GetNamespace(), *spec.AuthSecretRef.AccessKeyID, scoped)
+		if err != nil {
+			return nil, err
+		}
+		sak, err := a.secretKeyRef(ctx, a.store.GetNamespace(), *spec.AuthSecretRef.SecretAccessKey, scoped)
+		if err != nil {
+			return nil, err
+		}
+		nScp := aws.NewStaticCredentialsProvider(aKid, sak, "secret-manager")
+		cfg.Credentials = nScp
+		return &cfg, nil
+	}
 }
 
 func (a *AWS) secretKeyRef(ctx context.Context, namespace string, secretRef smmeta.SecretKeySelector, scoped bool) (string, error) {
@@ -204,6 +225,10 @@ type EndpointResolver struct {
 
 // ResolveEndpoint resolves custom endpoints if provided
 func (r *EndpointResolver) ResolveEndpoint(service, region string) (aws.Endpoint, error) {
+	defaultEndpoint, err := endpoints.NewDefaultResolver().ResolveEndpoint(service, region)
+	if err != nil {
+		return defaultEndpoint, err
+	}
 	if ep := os.Getenv(AWSSecretsmanagerEndpoint); ep != "" {
 		if service == "secretsmanager" {
 			return aws.Endpoint{
