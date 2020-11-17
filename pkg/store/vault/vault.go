@@ -21,14 +21,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/endpoints"
-	smmeta "github.com/itscontained/secret-manager/pkg/apis/meta/v1"
-	"github.com/itscontained/secret-manager/pkg/util/awsutil"
 	"io/ioutil"
 	"net/http"
 	"os"
 	"strings"
+
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/endpoints"
+	smmeta "github.com/itscontained/secret-manager/pkg/apis/meta/v1"
+	"github.com/itscontained/secret-manager/pkg/util/awsutil"
 
 	"github.com/go-logr/logr"
 
@@ -234,7 +235,7 @@ func (v *Vault) setToken(ctx context.Context, client Client) error {
 
 	awsAuth := v.store.GetSpec().Vault.Auth.AWS
 	if awsAuth != nil {
-		token, err := v.requestTokenWithAWSAuth(awsAuth, client, ctx)
+		token, err := v.requestTokenWithAWSAuth(ctx, awsAuth, client)
 		if err != nil {
 			return err
 		}
@@ -261,12 +262,10 @@ func (v *Vault) secretKeyRefOrEmptyString(ctx context.Context, selector *smmeta.
 		ref, err := v.secretKeyRef(ctx, v.namespace, selector.Name, selector.Key)
 		if err != nil {
 			return "", err
-		} else {
-			return ref, nil
 		}
-	} else {
-		return "", nil
+		return ref, nil
 	}
+	return "", nil
 }
 
 func (v *Vault) secretKeyRef(ctx context.Context, namespace, name, key string) (string, error) {
@@ -402,15 +401,10 @@ func (v *Vault) requestTokenWithKubernetesAuth(ctx context.Context, client Clien
 	return token, nil
 }
 
-func (v *Vault) requestTokenWithAWSAuth(auth *smv1alpha1.VaultAWSAuth, client Client, ctx context.Context) (string, error) {
+func (v *Vault) requestTokenWithAWSAuth(ctx context.Context, auth *smv1alpha1.VaultAWSAuth, client Client) (string, error) {
 	var err error
 	mount := auth.Path
 
-	// Do we need the role reference at all?
-	/*role, err := v.secretKeyRefOrEmptyString(ctx, auth.AWS.Role)
-	if err != nil {
-		return "", fmt.Errorf("error generating AWS login credentials: %s", err.Error())
-	}*/
 	var id *smmeta.SecretKeySelector
 	var key *smmeta.SecretKeySelector
 	aKid := ""
@@ -437,7 +431,7 @@ func (v *Vault) requestTokenWithAWSAuth(auth *smv1alpha1.VaultAWSAuth, client Cl
 		return "", fmt.Errorf("error generating AWS login credentials: %s", err.Error())
 	}
 
-	headerValue := auth.IamServerIdHeaderValue
+	headerValue := auth.IamServerIDHeaderValue
 	region := auth.Region
 	if region == "" {
 		region = awsutil.DefaultRegion
@@ -512,10 +506,13 @@ func (v *Vault) GenerateAWSLoginData(creds *credentials.Credentials, headerValue
 	if headerValue != "" {
 		stsRequest.HTTPRequest.Header.Add("X-Vault-AWS-IAM-Server-ID", headerValue)
 	}
-	stsRequest.Sign()
+	err = stsRequest.Sign()
+	if err != nil {
+		return nil, err
+	}
 
 	// Now extract out the relevant parts of the request
-	headersJson, err := json.Marshal(stsRequest.HTTPRequest.Header)
+	headersJSON, err := json.Marshal(stsRequest.HTTPRequest.Header)
 	if err != nil {
 		return nil, err
 	}
@@ -525,7 +522,7 @@ func (v *Vault) GenerateAWSLoginData(creds *credentials.Credentials, headerValue
 	}
 	loginData["iam_http_request_method"] = stsRequest.HTTPRequest.Method
 	loginData["iam_request_url"] = base64.StdEncoding.EncodeToString([]byte(stsRequest.HTTPRequest.URL.String()))
-	loginData["iam_request_headers"] = base64.StdEncoding.EncodeToString(headersJson)
+	loginData["iam_request_headers"] = base64.StdEncoding.EncodeToString(headersJSON)
 	loginData["iam_request_body"] = base64.StdEncoding.EncodeToString(requestBody)
 
 	return loginData, nil

@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"time"
 
+	"k8s.io/apimachinery/pkg/runtime"
+
 	smmeta "github.com/itscontained/secret-manager/pkg/apis/meta/v1"
 	smv1alpha1 "github.com/itscontained/secret-manager/pkg/apis/secretmanager/v1alpha1"
 	storeint "github.com/itscontained/secret-manager/pkg/store"
@@ -377,7 +379,9 @@ var _ = Describe("ExternalSecrets Controller", func() {
 						},
 					},
 				},
-				Template: templateObjectBytes,
+				Template: runtime.RawExtension{
+					Raw: templateObjectBytes,
+				},
 			}
 
 			key := types.NamespacedName{
@@ -463,7 +467,9 @@ var _ = Describe("ExternalSecrets Controller", func() {
 						},
 					},
 				},
-				Template: templateObjectBytes,
+				Template: runtime.RawExtension{
+					Raw: templateObjectBytes,
+				},
 			}
 
 			key := types.NamespacedName{

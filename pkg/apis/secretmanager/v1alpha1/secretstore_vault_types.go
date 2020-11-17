@@ -143,7 +143,7 @@ type VaultAWSAuth struct {
 
 	// The value to use for the X-Vault-AWS-IAM-Server-ID when authenticating on Vault, if any.
 	// +optional
-	IamServerIdHeaderValue string `json:"iamServerIdHeaderValue"`
+	IamServerIDHeaderValue string `json:"iamServerIdHeaderValue"`
 
 	// The region to authenticate in.
 	// +optional

@@ -138,19 +138,18 @@ func (a *AWS) readSecret(ctx context.Context, id, version, property string, igno
 			return nil, fmt.Errorf("could not parse secret data")
 		}
 		return secretData, nil
-	} else {
-		smData := make(map[string]string)
-		if resp.SecretString != nil {
-			err = json.Unmarshal([]byte(*resp.SecretString), &smData)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("unable to unmarshal secret value: %w", err)
-		}
-		for k, v := range smData {
-			secretData[k] = []byte(v)
-		}
-		return secretData, nil
 	}
+	smData := make(map[string]string)
+	if resp.SecretString != nil {
+		err = json.Unmarshal([]byte(*resp.SecretString), &smData)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("unable to unmarshal secret value: %w", err)
+	}
+	for k, v := range smData {
+		secretData[k] = []byte(v)
+	}
+	return secretData, nil
 }
 
 func (a *AWS) newConfig(ctx context.Context) (*aws.Config, error) {
@@ -171,7 +170,8 @@ func (a *AWS) newConfig(ctx context.Context) (*aws.Config, error) {
 		scoped = false
 	}
 	if spec.AuthSecretRef.Role != nil {
-		role, err := a.secretKeyRef(ctx, a.store.GetNamespace(), *spec.AuthSecretRef.Role, scoped)
+		role := ""
+		role, err = a.secretKeyRef(ctx, a.store.GetNamespace(), *spec.AuthSecretRef.Role, scoped)
 		if err != nil {
 			return nil, err
 		}
@@ -182,19 +182,18 @@ func (a *AWS) newConfig(ctx context.Context) (*aws.Config, error) {
 
 	if spec.AuthSecretRef == nil || spec.AuthSecretRef.AccessKeyID == nil || spec.AuthSecretRef.SecretAccessKey == nil {
 		return &cfg, nil
-	} else {
-		aKid, err := a.secretKeyRef(ctx, a.store.GetNamespace(), *spec.AuthSecretRef.AccessKeyID, scoped)
-		if err != nil {
-			return nil, err
-		}
-		sak, err := a.secretKeyRef(ctx, a.store.GetNamespace(), *spec.AuthSecretRef.SecretAccessKey, scoped)
-		if err != nil {
-			return nil, err
-		}
-		nScp := aws.NewStaticCredentialsProvider(aKid, sak, "secret-manager")
-		cfg.Credentials = nScp
-		return &cfg, nil
 	}
+	aKid, err := a.secretKeyRef(ctx, a.store.GetNamespace(), *spec.AuthSecretRef.AccessKeyID, scoped)
+	if err != nil {
+		return nil, err
+	}
+	sak, err := a.secretKeyRef(ctx, a.store.GetNamespace(), *spec.AuthSecretRef.SecretAccessKey, scoped)
+	if err != nil {
+		return nil, err
+	}
+	nScp := aws.NewStaticCredentialsProvider(aKid, sak, "secret-manager")
+	cfg.Credentials = nScp
+	return &cfg, nil
 }
 
 func (a *AWS) secretKeyRef(ctx context.Context, namespace string, secretRef smmeta.SecretKeySelector, scoped bool) (string, error) {
