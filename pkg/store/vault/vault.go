@@ -232,6 +232,17 @@ func (v *Vault) setToken(ctx context.Context, client Client) error {
 		return nil
 	}
 
+	awsAuth := v.store.GetSpec().Vault.Auth.AWS
+	if awsAuth != nil {
+		token, err := v.requestTokenWithAWSAuth(awsAuth, client, ctx)
+		if err != nil {
+			return err
+		}
+		client.SetToken(token)
+
+		return nil
+	}
+
 	kubernetesAuth := v.store.GetSpec().Vault.Auth.Kubernetes
 	if kubernetesAuth != nil {
 		token, err := v.requestTokenWithKubernetesAuth(ctx, client, kubernetesAuth)
