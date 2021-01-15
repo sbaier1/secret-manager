@@ -28,8 +28,11 @@ import (
 	"github.com/aws/aws-sdk-go/aws/endpoints"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/sts"
+
 	"github.com/go-logr/logr"
+
 	"github.com/hashicorp/errwrap"
+
 	"github.com/pkg/errors"
 )
 

@@ -26,23 +26,22 @@ import (
 	"os"
 	"strings"
 
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/endpoints"
-	smmeta "github.com/itscontained/secret-manager/pkg/apis/meta/v1"
-	"github.com/itscontained/secret-manager/pkg/util/awsutil"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/sts"
 
 	"github.com/go-logr/logr"
 
 	vault "github.com/hashicorp/vault/api"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/sts"
-
+	smmeta "github.com/itscontained/secret-manager/pkg/apis/meta/v1"
 	smv1alpha1 "github.com/itscontained/secret-manager/pkg/apis/secretmanager/v1alpha1"
 	ctxlog "github.com/itscontained/secret-manager/pkg/log"
 	"github.com/itscontained/secret-manager/pkg/store"
 	"github.com/itscontained/secret-manager/pkg/store/schema"
+	"github.com/itscontained/secret-manager/pkg/util/awsutil"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -112,7 +111,7 @@ func (v *Vault) GetSecret(ctx context.Context, ref smv1alpha1.RemoteReference) (
 		version = *ref.Version
 	}
 
-	data, err := v.readSecret(ctx, ref.Name, version)
+	data, err := v.readSecret(ctx, ref.Name, ref.IgnoreStructure, version)
 	if err != nil {
 		return nil, err
 	}
@@ -133,10 +132,10 @@ func (v *Vault) GetSecretMap(ctx context.Context, ref smv1alpha1.RemoteReference
 		version = *ref.Version
 	}
 
-	return v.readSecret(ctx, ref.Name, version)
+	return v.readSecret(ctx, ref.Name, ref.IgnoreStructure, version)
 }
 
-func (v *Vault) readSecret(ctx context.Context, path, version string) (map[string][]byte, error) {
+func (v *Vault) readSecret(ctx context.Context, path string, ignoreStructure bool, version string) (map[string][]byte, error) {
 	storeSpec := v.store.GetSpec()
 	kvPath := storeSpec.Vault.Path
 
@@ -184,7 +183,15 @@ func (v *Vault) readSecret(ctx context.Context, path, version string) (map[strin
 		if !ok {
 			return nil, fmt.Errorf("unexpected secret type")
 		}
-		byteMap[k] = []byte(str)
+		if ignoreStructure {
+			decodedValue, err := base64.StdEncoding.DecodeString(str)
+			if err != nil {
+				return nil, fmt.Errorf("secret data at key %q was not encoded as base64", k)
+			}
+			byteMap[k] = decodedValue
+		} else {
+			byteMap[k] = []byte(str)
+		}
 	}
 
 	return byteMap, nil
